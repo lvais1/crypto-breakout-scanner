@@ -1,0 +1,57 @@
+name: Bybit breakout scan
+
+on:
+  schedule:
+    - cron: "2/5 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: bybit-breakout-scan
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      DATABASE_PATH: scanner.db
+      DEBUG_DECISIONS: "true"
+      LOG_LEVEL: INFO
+      SYMBOLS: '["BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","XRPUSDT","ADAUSDT","DOGEUSDT","AVAXUSDT","LINKUSDT","1000PEPEUSDT"]'
+      TIMEFRAME: 5m
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+    steps:
+      - name: Check out scanner
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Restore decision history
+        uses: actions/cache/restore@v4
+        with:
+          path: scanner.db
+          key: scanner-db-${{ github.run_id }}
+          restore-keys: |
+            scanner-db-
+
+      - name: Install scanner
+        run: python -m pip install .
+
+      - name: Scan all Bybit symbols
+        run: breakout-scanner once
+
+      - name: Save decision history
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: scanner.db
+          key: scanner-db-${{ github.run_id }}

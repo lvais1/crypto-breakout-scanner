@@ -1,0 +1,26 @@
+primary_region = "ams"
+kill_signal = "SIGTERM"
+kill_timeout = 30
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  DATABASE_PATH = "/app/data/scanner.db"
+  DEBUG_DECISIONS = "true"
+  LOG_LEVEL = "INFO"
+  SYMBOLS = "[\"BTCUSDT\",\"ETHUSDT\",\"SOLUSDT\",\"BNBUSDT\",\"XRPUSDT\",\"ADAUSDT\",\"DOGEUSDT\",\"AVAXUSDT\",\"LINKUSDT\",\"1000PEPEUSDT\"]"
+  TIMEFRAME = "5m"
+
+[processes]
+  worker = "breakout-scanner run"
+
+[[restart]]
+  policy = "always"
+  processes = ["worker"]
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory = "512mb"
+  processes = ["worker"]
