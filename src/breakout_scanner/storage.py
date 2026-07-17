@@ -97,3 +97,17 @@ class Storage:
         with sqlite3.connect(self.path) as connection:
             rows = connection.execute("SELECT chat_id FROM telegram_subscribers ORDER BY subscribed_at").fetchall()
         return [int(row[0]) for row in rows]
+
+    def active_paper_trades(self) -> list[dict[str, object]]:
+        with sqlite3.connect(self.path) as connection:
+            connection.row_factory = sqlite3.Row
+            rows = connection.execute("""
+                SELECT symbol,direction,status,planned_entry_price,actual_entry_price,
+                       current_stop_price,tp1,tp2,tp3,initial_quantity,remaining_quantity,
+                       opened_at,last_market_price,last_price_time,tp1_hit_at,tp2_hit_at,
+                       tp3_hit_at,realized_net_pnl,unrealized_pnl,realized_r
+                FROM paper_trades
+                WHERE status IN ('WAITING_ENTRY','OPEN','PARTIALLY_CLOSED')
+                ORDER BY signal_created_at
+            """).fetchall()
+        return [dict(row) for row in rows]

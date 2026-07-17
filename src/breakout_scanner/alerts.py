@@ -128,6 +128,41 @@ def is_stop_command(text: object) -> bool:
     return text.strip().split(maxsplit=1)[0].split("@", 1)[0].lower() == "/stop"
 
 
+def is_status_command(text: object) -> bool:
+    if not isinstance(text, str) or not text.strip():
+        return False
+    return text.strip().split(maxsplit=1)[0].split("@", 1)[0].lower() == "/status"
+
+
+def format_active_trades(trades: list[dict[str, object]]) -> str:
+    if not trades:
+        return "⚪ אין עסקאות Paper פעילות כרגע.\n\nהסורק ממשיך לעבוד. כשייווצר אות חדש הוא יופיע כאן ויהיה ניתן לעקוב אחריו עם /status."
+    sections = [f"📡 עסקאות Paper פעילות: {len(trades)}"]
+    for trade in trades:
+        hits = [f"TP{i}" for i in (1, 2, 3) if trade.get(f"tp{i}_hit_at")]
+        next_target = next((f"TP{i}: {float(trade[f'tp{i}']):.8g}" for i in (1, 2, 3) if not trade.get(f"tp{i}_hit_at")), "אין")
+        last_time = str(trade.get("last_price_time") or "טרם התקבל")
+        entry = trade.get("actual_entry_price") or trade["planned_entry_price"]
+        sections.append(
+            "\n".join([
+                f"\n🟢 {trade['symbol']} — {trade['status']}",
+                f"📈/📉 כיוון: {trade['direction']}",
+                f"💵 כניסה: {float(entry):.8g}",
+                f"📍 מחיר Mark אחרון: {float(trade['last_market_price']):.8g}" if trade.get("last_market_price") is not None else "📍 מחיר Mark אחרון: אין",
+                f"🛡️ סטופ נוכחי: {float(trade['current_stop_price']):.8g}",
+                f"🎯 היעד הבא: {next_target}",
+                f"✅ יעדים שהושגו: {', '.join(hits) or 'אין'}",
+                f"📦 כמות שנותרה: {float(trade['remaining_quantity']):.8g} / {float(trade['initial_quantity']):.8g}",
+                f"💰 PnL ממומש נטו: {float(trade['realized_net_pnl']):.3f} USDT",
+                f"〽️ PnL פתוח: {float(trade['unrealized_pnl']):.3f} USDT",
+                f"📏 תוצאה ממומשת: {float(trade['realized_r']):.2f}R",
+                f"🕒 עדכון מחיר אחרון: {last_time}",
+            ])
+        )
+    sections.append("\n⚠️ Paper Trading בלבד.")
+    return "\n".join(sections)
+
+
 async def listen_for_telegram_commands(cfg: Settings, storage: Storage) -> None:
     if not cfg.telegram_bot_token:
         LOG.warning("Telegram status listener disabled — bot token is missing")
@@ -177,6 +212,8 @@ async def listen_for_telegram_commands(cfg: Settings, storage: Storage) -> None:
                         elif is_stop_command(text):
                             storage.remove_telegram_subscriber(chat_id)
                             status = "🔕 Alerts stopped. Send /start to subscribe again."
+                        elif is_status_command(text):
+                            status = format_active_trades(storage.active_paper_trades())
                         else:
                             continue
                         async with session.post(

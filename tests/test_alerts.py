@@ -1,4 +1,4 @@
-from breakout_scanner.alerts import is_start_command, is_stop_command
+from breakout_scanner.alerts import format_active_trades, is_start_command, is_status_command, is_stop_command
 
 
 def test_start_command_recognizes_private_bot_variants() -> None:
@@ -17,3 +17,9 @@ def test_stop_command_recognizes_bot_variants() -> None:
     assert is_stop_command("/stop")
     assert is_stop_command("/stop@LiorAlerts_bot")
     assert not is_stop_command("stop")
+
+
+def test_status_command_and_empty_status_message() -> None:
+    assert is_status_command("/status")
+    assert is_status_command("/status@LiorAlerts_bot")
+    assert "אין עסקאות Paper פעילות" in format_active_trades([])
