@@ -134,6 +134,34 @@ def is_status_command(text: object) -> bool:
     return text.strip().split(maxsplit=1)[0].split("@", 1)[0].lower() == "/status"
 
 
+def is_near_command(text: object) -> bool:
+    if not isinstance(text, str) or not text.strip():
+        return False
+    return text.strip().split(maxsplit=1)[0].split("@", 1)[0].lower() == "/near"
+
+
+def format_near_signals(candidates: list[dict[str, object]]) -> str:
+    if not candidates:
+        return "🔭 כרגע אין צמדים שעברו את שלב הפריצה ומתקרבים לתנאי ההתראה.\n\nהנתון יתעדכן בסגירת הנר הבא."
+    lines = ["🔭 צמדים הקרובים להתראה", ""]
+    stage_names = {"RETEST": "ממתין לאישור Retest", "CONFIDENCE": "Setup מלא, ציון נמוך מהסף", "RISK_REWARD": "Setup קיים, יחס סיכון/סיכוי לא מספיק", "RISK_PLAN": "Setup קיים, תכנית הסיכון נפסלה"}
+    for item in candidates:
+        missing = []
+        if item.get("stage") == "RETEST":
+            if not item.get("touched"): missing.append("נגיעה ברמה")
+            if not item.get("held"): missing.append("החזקה מעבר לרמה")
+            if not item.get("rejected"): missing.append("נר דחייה")
+        detail = f"\n   חסר: {', '.join(missing)}" if missing else ""
+        confidence = f"\n   ציון: {item.get('confidence_score')}/{item.get('required_confidence')}" if item.get("stage") == "CONFIDENCE" else ""
+        lines.append(
+            f"• {item['symbol']} | {item.get('direction', '?')} | קרבה טכנית {item['proximity']}%\n"
+            f"   {stage_names.get(str(item.get('stage')), str(item.get('stage')))}{detail}{confidence}\n"
+            f"   עודכן: {item['created_at']} UTC"
+        )
+    lines.append("\n⚠️ אחוז הקרבה הוא מדד שלבי פנימי, לא הסתברות להצלחת עסקה.")
+    return "\n".join(lines)
+
+
 def format_active_trades(trades: list[dict[str, object]]) -> str:
     if not trades:
         return "⚪ אין עסקאות Paper פעילות כרגע.\n\nהסורק ממשיך לעבוד. כשייווצר אות חדש הוא יופיע כאן ויהיה ניתן לעקוב אחריו עם /status."
@@ -214,6 +242,8 @@ async def listen_for_telegram_commands(cfg: Settings, storage: Storage) -> None:
                             status = "🔕 Alerts stopped. Send /start to subscribe again."
                         elif is_status_command(text):
                             status = format_active_trades(storage.active_paper_trades())
+                        elif is_near_command(text):
+                            status = format_near_signals(storage.near_signal_pairs())
                         else:
                             continue
                         async with session.post(

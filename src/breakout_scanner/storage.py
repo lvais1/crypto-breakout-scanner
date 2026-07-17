@@ -111,3 +111,24 @@ class Storage:
                 ORDER BY signal_created_at
             """).fetchall()
         return [dict(row) for row in rows]
+
+    def near_signal_pairs(self, limit: int = 5) -> list[dict[str, object]]:
+        with sqlite3.connect(self.path) as connection:
+            rows = connection.execute("""
+                SELECT d.symbol,d.created_at,d.payload_json
+                FROM decisions d
+                WHERE d.id=(SELECT MAX(d2.id) FROM decisions d2 WHERE d2.symbol=d.symbol)
+                  AND d.status=?
+                ORDER BY d.id DESC
+            """, (str(SignalStatus.NO_SIGNAL),)).fetchall()
+        candidates: list[dict[str, object]] = []
+        for symbol, created_at, payload_json in rows:
+            try:
+                diagnostics = json.loads(payload_json).get("diagnostics", {})
+                proximity = int(diagnostics.get("proximity", 0))
+            except (json.JSONDecodeError, TypeError, ValueError):
+                continue
+            if proximity < 55:
+                continue
+            candidates.append({"symbol": symbol, "created_at": created_at, **diagnostics, "proximity": proximity})
+        return sorted(candidates, key=lambda item: int(item["proximity"]), reverse=True)[:limit]

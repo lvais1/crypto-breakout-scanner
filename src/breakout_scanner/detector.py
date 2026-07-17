@@ -66,6 +66,7 @@ def _score(frame: pd.DataFrame, zone: Zone, bidx: int, ridx: int, direction: Dir
 
 def evaluate(frame: pd.DataFrame, symbol: str, rules: SymbolRules, cfg: Settings) -> Decision:
     reasons: list[str] = []
+    best_candidate: dict[str, object] = {}
     needed = ["atr14", "ema50", "ema200", "volume_ma20", "atr_ma50"]
     if len(frame) < 210 or not finite_row(frame.iloc[-1], needed):
         return Decision(SignalStatus.NO_SIGNAL, reasons=["insufficient_or_invalid_indicator_history"])
@@ -87,6 +88,13 @@ def evaluate(frame: pd.DataFrame, symbol: str, rules: SymbolRules, cfg: Settings
             touched = float(retest.low) <= zone.high + tolerance if direction == Direction.LONG else float(retest.high) >= zone.low - tolerance
             held = float(retest.close) > zone.high if direction == Direction.LONG else float(retest.close) < zone.low
             rejected, _ = _rejection(retest, frame.iloc[last - 1], direction)
+            candidate = {
+                "stage": "RETEST", "direction": str(direction), "touched": touched,
+                "held": held, "rejected": rejected, "elapsed_candles": elapsed, **metrics,
+            }
+            candidate["proximity"] = 55 + 10 * sum((touched, held, rejected))
+            if int(candidate["proximity"]) > int(best_candidate.get("proximity", 0)):
+                best_candidate = candidate
             if not (touched and held and rejected):
                 reasons.append("retest_did_not_touch_hold_and_reject")
                 continue
@@ -99,15 +107,18 @@ def evaluate(frame: pd.DataFrame, symbol: str, rules: SymbolRules, cfg: Settings
             structural_target = (min(targets) if direction == Direction.LONG else max(targets)) if targets else entry + (3 if direction == Direction.LONG else -3) * abs(entry - stop)
             tp1, tp2, tp3, rr3 = take_profits(direction, entry, stop, structural_target)
             if rr3 < cfg.min_rr:
+                best_candidate.update({"stage": "RISK_REWARD", "proximity": 86, "risk_reward": rr3})
                 reasons.append("next_structure_below_minimum_rr")
                 continue
             try:
                 plan = create_risk_plan(entry, stop, rules, cfg)
             except ValueError as exc:
+                best_candidate.update({"stage": "RISK_PLAN", "proximity": 88})
                 reasons.append(f"risk_plan_rejected:{exc}")
                 continue
             score = _score(frame, zone, bidx, last, direction, cfg)
             if score.total < cfg.min_confidence:
+                best_candidate.update({"stage": "CONFIDENCE", "proximity": min(99, round(score.total / cfg.min_confidence * 100)), "confidence_score": score.total, "required_confidence": cfg.min_confidence})
                 reasons.append(f"confidence_below_threshold:{score.total}")
                 continue
             created = pd.Timestamp(retest.close_time).to_pydatetime()
@@ -124,5 +135,4 @@ def evaluate(frame: pd.DataFrame, symbol: str, rules: SymbolRules, cfg: Settings
                 created + timedelta(seconds=candle_delta.total_seconds() * cfg.signal_expiry_candles),
             )
             return Decision(SignalStatus.PAPER_SIGNAL, signal=signal, diagnostics=metrics)
-    return Decision(SignalStatus.NO_SIGNAL, reasons=reasons or ["no_breakout_retest_setup"])
-
+    return Decision(SignalStatus.NO_SIGNAL, reasons=reasons or ["no_breakout_retest_setup"], diagnostics=best_candidate)
