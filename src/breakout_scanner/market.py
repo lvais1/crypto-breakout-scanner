@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 
 import aiohttp
 import pandas as pd
@@ -52,6 +53,19 @@ class BybitMarketData:
         self._check_response(data)
         return float(data["result"]["list"][0]["markPrice"])
 
+    async def mark_price_klines(self, symbol: str, start_ms: int) -> list[dict[str, object]]:
+        url = f"{self.cfg.rest_base_url}/v5/market/mark-price-kline"
+        params = {"category": "linear", "symbol": symbol, "interval": "1", "start": start_ms, "limit": 1000}
+        async with aiohttp.ClientSession(timeout=self.timeout) as session:
+            async with session.get(url, params=params) as response:
+                response.raise_for_status()
+                data = await response.json()
+        self._check_response(data)
+        return [
+            {"start": int(row[0]), "open": float(row[1]), "high": float(row[2]), "low": float(row[3]), "close": float(row[4])}
+            for row in reversed(data["result"]["list"])
+        ]
+
     async def symbol_rules(self, symbol: str) -> SymbolRules:
         url = f"{self.cfg.rest_base_url}/v5/market/instruments-info"
         async with aiohttp.ClientSession(timeout=self.timeout) as session:
@@ -95,6 +109,36 @@ class BybitMarketData:
                                 raise aiohttp.ClientConnectionError("Bybit websocket closed")
             except (aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError) as exc:
                 LOG.warning("Bybit websocket reconnect: %s (retry in %.0fs)", exc, delay)
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, self.cfg.reconnect_max_seconds)
+
+    async def mark_prices(self, symbols: list[str]) -> AsyncIterator[tuple[str, float, datetime]]:
+        topics = [f"tickers.{symbol}" for symbol in symbols]
+        delay = 1.0
+        while True:
+            try:
+                timeout = aiohttp.ClientTimeout(total=None, sock_read=None)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.ws_connect(self.cfg.ws_base_url, heartbeat=20) as ws:
+                        await ws.send_json({"op": "subscribe", "args": topics})
+                        delay = 1.0
+                        while True:
+                            try:
+                                message = await ws.receive(timeout=20)
+                            except asyncio.TimeoutError:
+                                await ws.send_json({"op": "ping"})
+                                continue
+                            if message.type == aiohttp.WSMsgType.TEXT:
+                                payload = json.loads(message.data)
+                                data = payload.get("data", {})
+                                mark = data.get("markPrice") if isinstance(data, dict) else None
+                                topic = str(payload.get("topic", ""))
+                                if topic.startswith("tickers.") and mark not in (None, ""):
+                                    yield topic.split(".", 1)[1], float(mark), datetime.fromtimestamp(int(payload["ts"]) / 1000, UTC)
+                            elif message.type in {aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR}:
+                                raise aiohttp.ClientConnectionError("Bybit mark-price websocket closed")
+            except (aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError, ValueError, KeyError) as exc:
+                LOG.warning("Bybit mark-price reconnect: %s (retry in %.0fs)", exc, delay)
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, self.cfg.reconnect_max_seconds)
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -56,6 +56,24 @@ class Settings(BaseSettings):
 
     request_timeout_seconds: float = 15.0
     reconnect_max_seconds: float = 60.0
+
+    tp1_close_fraction: float = Field(default=0.40, ge=0, le=1)
+    tp2_close_fraction: float = Field(default=0.40, ge=0, le=1)
+    tp3_close_fraction: float = Field(default=0.20, ge=0, le=1)
+    move_stop_to_break_even_after_tp1: bool = True
+    stop_after_tp2: str = "TP1"
+    mark_price_stale_seconds: int = Field(default=30, ge=5, le=300)
+    paper_monitoring_enabled: bool = True
+    paper_status_updates_enabled: bool = False
+
+    @model_validator(mode="after")
+    def validate_paper_exit_configuration(self) -> "Settings":
+        total = self.tp1_close_fraction + self.tp2_close_fraction + self.tp3_close_fraction
+        if abs(total - 1.0) > 1e-9:
+            raise ValueError("TP close fractions must sum to 1.0")
+        if self.stop_after_tp2 not in {"TP1", "NONE"}:
+            raise ValueError("stop_after_tp2 must be TP1 or NONE")
+        return self
 
     @field_validator("rest_base_url")
     @classmethod

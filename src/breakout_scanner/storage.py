@@ -13,6 +13,9 @@ class Storage:
 
     def initialize(self) -> None:
         with sqlite3.connect(self.path) as connection:
+            existing = {row[1] for row in connection.execute("PRAGMA table_info(paper_trades)")}
+            if existing and "symbol" not in existing:
+                connection.execute("ALTER TABLE paper_trades RENAME TO paper_trades_legacy")
             connection.executescript("""
                 PRAGMA journal_mode=WAL;
                 CREATE TABLE IF NOT EXISTS decisions (
@@ -23,9 +26,31 @@ class Storage:
                 );
                 CREATE INDEX IF NOT EXISTS idx_decisions_symbol_time ON decisions(symbol, created_at);
                 CREATE TABLE IF NOT EXISTS paper_trades (
-                    signal_id TEXT PRIMARY KEY, opened_at TEXT NOT NULL, closed_at TEXT,
-                    status TEXT NOT NULL, exit_price REAL, pnl_usdt REAL, outcome_r REAL,
+                    signal_id TEXT PRIMARY KEY, symbol TEXT NOT NULL, direction TEXT NOT NULL,
+                    status TEXT NOT NULL, planned_entry_price REAL NOT NULL, actual_entry_price REAL,
+                    initial_stop_price REAL NOT NULL, current_stop_price REAL NOT NULL,
+                    tp1 REAL NOT NULL, tp2 REAL NOT NULL, tp3 REAL NOT NULL,
+                    initial_quantity REAL NOT NULL, remaining_quantity REAL NOT NULL,
+                    step_size REAL NOT NULL, margin_usdt REAL NOT NULL, leverage INTEGER NOT NULL,
+                    signal_created_at TEXT NOT NULL, expiry_time TEXT NOT NULL,
+                    opened_at TEXT, closed_at TEXT, last_market_price REAL, last_price_time TEXT,
+                    tp1_hit_at TEXT, tp2_hit_at TEXT, tp3_hit_at TEXT, stop_hit_at TEXT,
+                    realized_gross_pnl REAL NOT NULL DEFAULT 0, realized_net_pnl REAL NOT NULL DEFAULT 0,
+                    unrealized_pnl REAL NOT NULL DEFAULT 0, cumulative_fees REAL NOT NULL DEFAULT 0,
+                    realized_r REAL NOT NULL DEFAULT 0, margin_return_percent REAL NOT NULL DEFAULT 0,
+                    close_reason TEXT, entry_fee_paid REAL NOT NULL DEFAULT 0,
                     FOREIGN KEY(signal_id) REFERENCES decisions(signal_id)
+                );
+                CREATE TABLE IF NOT EXISTS paper_trade_events (
+                    event_id INTEGER PRIMARY KEY, signal_id TEXT NOT NULL, event_type TEXT NOT NULL,
+                    target_number INTEGER NOT NULL DEFAULT 0, event_time TEXT NOT NULL,
+                    market_price REAL NOT NULL, execution_price REAL NOT NULL,
+                    closed_quantity REAL NOT NULL, remaining_quantity REAL NOT NULL,
+                    event_gross_pnl REAL NOT NULL, event_net_pnl REAL NOT NULL,
+                    cumulative_net_pnl REAL NOT NULL, cumulative_r REAL NOT NULL,
+                    payload_json TEXT NOT NULL, telegram_sent_at TEXT,
+                    UNIQUE(signal_id,event_type,target_number),
+                    FOREIGN KEY(signal_id) REFERENCES paper_trades(signal_id)
                 );
                 CREATE TABLE IF NOT EXISTS telegram_subscribers (
                     chat_id INTEGER PRIMARY KEY,

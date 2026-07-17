@@ -45,6 +45,37 @@ pytest
 
 ## הנחות ושיקולי בטיחות
 
+## Paper trade lifecycle monitoring
+
+Continuous mode (`breakout-scanner run`) monitors Bybit linear mark prices without placing orders. A saved signal creates an `OPEN` paper trade immediately when the current mark remains within the detector's 0.25R entry guard. The lifecycle engine persists partial exits, costs, stop changes, PnL, and idempotent events in SQLite.
+
+Default exit allocation:
+
+- TP1 closes 40% and moves the simulated stop to cost-inclusive break-even.
+- TP2 closes 40% and moves the simulated stop to TP1.
+- TP3 closes the full remaining quantity.
+
+All fractions and stop behavior are configurable in `.env`; the three fractions must sum to `1.0`. On restart, active trades are restored, missing one-minute Bybit mark-price candles are replayed conservatively (Stop first when candle order is unknowable), and then the real-time mark-price WebSocket resumes. Duplicate ticks and lifecycle events are ignored by timestamps and database uniqueness constraints.
+
+Example lifecycle:
+
+```text
+PAPER_SIGNAL saved
+→ OPEN at planned close (mark still within 0.25R)
+→ TP1: close 40%, stop → cost-inclusive break-even
+→ TP2: close 40%, stop → TP1
+→ TP3: close remaining 20%, status → CLOSED
+```
+
+Alternative ending: after TP1 or TP2, the moved stop can close only the remaining quantity. The final Telegram message reports cumulative net PnL, so a post-target stop is not automatically labeled a losing trade.
+
+Tables:
+
+- `paper_trades`: current durable lifecycle state and cumulative PnL.
+- `paper_trade_events`: immutable ENTRY/TP/STOP/EXPIRED events with a unique `(signal_id, event_type, target_number)` key.
+
+This subsystem is paper-only. It contains no authenticated Bybit client and no order endpoint.
+
 - נרות Bybit שטרם נסגרו מסוננים לפי זמן הסגירה לפני הניתוח.
 - אם TP וסטופ נוגעים באותו נר ב-Backtest, הסטופ נחשב ראשון (הנחה שמרנית).
 - TP3 הוא המבנה הנגדי הקרוב; כשאין מבנה כזה הוא מוגדר ל-3R, אך האות עדיין חייב לעבור 1.5R.

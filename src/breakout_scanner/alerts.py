@@ -9,6 +9,7 @@ import aiohttp
 
 from .config import Settings
 from .models import Direction, Signal
+from .paper import PaperEvent
 from .storage import Storage
 
 LOG = logging.getLogger(__name__)
@@ -66,6 +67,52 @@ async def send_telegram(signal: Signal, cfg: Settings, chat_ids: list[int] | Non
                 delivered = True
             except aiohttp.ClientError as exc:
                 LOG.warning("Telegram alert delivery failed: %s", type(exc).__name__)
+    return delivered
+
+
+def format_paper_event(event: PaperEvent) -> str:
+    arrow = "📈" if event.direction == "LONG" else "📉"
+    if event.event_type == "EXPIRED":
+        return f"⌛ Signal expired without entry\n\n📊 Pair: {event.symbol}\n{arrow} Direction: {event.direction}\n💵 Planned entry: {event.execution_price:.8g}\n\nNo paper trade was opened."
+    if event.event_type == "TP":
+        message = (
+            f"✅ TP{event.target_number} reached\n\n📊 Pair: {event.symbol}\n{arrow} Direction: {event.direction}\n"
+            f"💵 Target: {event.execution_price:.8g}\n💵 Observed: {event.market_price:.8g}\n"
+            f"📦 Closed: {event.closed_quantity:.8g}\n📦 Remaining: {event.remaining_quantity:.8g}\n"
+            f"💰 Cumulative net PnL: {event.cumulative_net_pnl:.3f} USDT\n📏 Result: {event.cumulative_r:.2f}R\n"
+            f"🛡️ New stop: {event.current_stop:.8g}\n\n⚠️ Paper Trading only."
+        )
+        if event.close_reason:
+            message += (
+                f"\n\n🏁 Paper trade closed\n📋 Reason: {event.close_reason}\n"
+                f"🎯 Targets: {', '.join(event.targets_hit)}\n💵 Net PnL: {event.cumulative_net_pnl:.3f} USDT\n"
+                f"📏 Result: {event.cumulative_r:.2f}R"
+            )
+        return message
+    message = (
+        f"❌ Stop Loss hit\n\n📊 Pair: {event.symbol}\n{arrow} Direction: {event.direction}\n"
+        f"🚫 Stop: {event.execution_price:.8g}\n📦 Closed: {event.closed_quantity:.8g}\n"
+        f"💥 Event net PnL: {event.event_net_pnl:.3f} USDT\n💰 Total net PnL: {event.cumulative_net_pnl:.3f} USDT\n"
+        f"📏 Total: {event.cumulative_r:.2f}R\n📋 Targets hit: {', '.join(event.targets_hit) or 'None'}\n\n⚠️ Paper Trading only."
+    )
+    if event.close_reason:
+        message += f"\n\n🏁 Paper trade closed\n📋 Reason: {event.close_reason}\n💵 Net PnL: {event.cumulative_net_pnl:.3f} USDT"
+    return message
+
+
+async def send_paper_event(event: PaperEvent, cfg: Settings, chat_ids: list[int]) -> bool:
+    if not cfg.telegram_bot_token or not chat_ids:
+        return False
+    url = f"https://api.telegram.org/bot{cfg.telegram_bot_token}/sendMessage"
+    delivered = False
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=cfg.request_timeout_seconds)) as session:
+        for chat_id in set(chat_ids):
+            try:
+                async with session.post(url, data={"chat_id": str(chat_id), "text": format_paper_event(event)}) as response:
+                    response.raise_for_status()
+                delivered = True
+            except aiohttp.ClientError as exc:
+                LOG.warning("Telegram paper event delivery failed: %s", type(exc).__name__)
     return delivered
 
 

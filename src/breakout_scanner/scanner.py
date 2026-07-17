@@ -3,13 +3,15 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from datetime import UTC, datetime
 
-from .alerts import listen_for_telegram_commands, send_telegram
+from .alerts import listen_for_telegram_commands, send_paper_event, send_telegram
 from .config import Settings
 from .detector import evaluate
 from .indicators import enrich
 from .market import BybitMarketData
 from .models import Decision, SignalStatus
+from .paper import PaperEvent, PaperTradeEngine
 from .storage import Storage
 
 LOG = logging.getLogger(__name__)
@@ -21,6 +23,7 @@ class Scanner:
         self.market = BybitMarketData(cfg)
         self.storage = Storage(cfg.database_path)
         self.storage.initialize()
+        self.paper = PaperTradeEngine(cfg.database_path, cfg)
         if cfg.telegram_chat_id:
             try:
                 self.storage.add_telegram_subscriber(int(cfg.telegram_chat_id))
@@ -51,6 +54,8 @@ class Scanner:
                     LOG.info("%-14s NO_SIGNAL — duplicate level", symbol)
                     return True
                 if self.storage.save(symbol, decision):
+                    if self.cfg.paper_monitoring_enabled:
+                        self.paper.create_trade(signal, rules.step_size, mark_price, immediate=True)
                     await send_telegram(signal, self.cfg, self.storage.telegram_subscribers())
                     LOG.info("%-14s PAPER_SIGNAL — %s score=%s", symbol, signal.direction, signal.confidence_score)
                     print(json.dumps(signal.as_dict(), ensure_ascii=False, indent=2))
@@ -73,7 +78,35 @@ class Scanner:
 
     async def run(self) -> None:
         await self.once()
-        await asyncio.gather(self._run_market_stream(), listen_for_telegram_commands(self.cfg, self.storage))
+        tasks = [self._run_market_stream(), listen_for_telegram_commands(self.cfg, self.storage)]
+        if self.cfg.paper_monitoring_enabled:
+            tasks.append(self._run_paper_monitor())
+        await asyncio.gather(*tasks)
+
+    async def _run_paper_monitor(self) -> None:
+        symbols = sorted(set(self.cfg.symbols) | set(self.paper.active_symbols()))
+        LOG.info("PAPER MONITOR ACTIVE — %d Bybit mark-price streams", len(symbols))
+        for symbol, last_time in self.paper.recovery_points():
+            try:
+                candles = await self.market.mark_price_klines(symbol, int(last_time.timestamp() * 1000))
+                for candle in candles:
+                    close_time = datetime.fromtimestamp((int(candle["start"]) + 60_000) / 1000, UTC)
+                    await self._handle_paper_events(self.paper.process_candle(symbol, float(candle["high"]), float(candle["low"]), close_time))
+                price = await self.market.mark_price(symbol)
+                await self._handle_paper_events(self.paper.process_price(symbol, price, datetime.now(UTC)))
+            except Exception:
+                LOG.exception("%-14s paper recovery failed", symbol)
+        async for symbol, price, event_time in self.market.mark_prices(symbols):
+            if (datetime.now(UTC) - event_time).total_seconds() > self.cfg.mark_price_stale_seconds:
+                LOG.warning("%-14s stale mark price ignored", symbol)
+                continue
+            await self._handle_paper_events(self.paper.process_price(symbol, price, event_time))
+
+    async def _handle_paper_events(self, events: list[PaperEvent]) -> None:
+        for event in events:
+            LOG.info("%-14s PAPER %s%s", event.symbol, event.event_type, f"{event.target_number}" if event.target_number else "")
+            if await send_paper_event(event, self.cfg, self.storage.telegram_subscribers()):
+                self.paper.mark_event_sent(event)
 
     async def _run_market_stream(self) -> None:
         cycle_end: object | None = None
