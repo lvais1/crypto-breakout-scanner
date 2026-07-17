@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 
-from .alerts import send_telegram
+from .alerts import listen_for_telegram_commands, send_telegram
 from .config import Settings
 from .detector import evaluate
 from .indicators import enrich
@@ -67,6 +68,9 @@ class Scanner:
 
     async def run(self) -> None:
         await self.once()
+        await asyncio.gather(self._run_market_stream(), listen_for_telegram_commands(self.cfg))
+
+    async def _run_market_stream(self) -> None:
         cycle_end: object | None = None
         checked: set[str] = set()
         async for symbol, candle in self.market.closed_klines():

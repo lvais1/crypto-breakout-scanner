@@ -1,9 +1,16 @@
 from __future__ import annotations
 
+import asyncio
+import json
+import logging
+from datetime import UTC, datetime
+
 import aiohttp
 
 from .config import Settings
 from .models import Direction, Signal
+
+LOG = logging.getLogger(__name__)
 
 
 def format_telegram(signal: Signal) -> str:
@@ -46,3 +53,61 @@ async def send_telegram(signal: Signal, cfg: Settings) -> bool:
             response.raise_for_status()
     return True
 
+
+def is_start_command(text: object) -> bool:
+    if not isinstance(text, str) or not text.strip():
+        return False
+    return text.strip().split(maxsplit=1)[0].split("@", 1)[0].lower() == "/start"
+
+
+async def listen_for_telegram_commands(cfg: Settings) -> None:
+    if not cfg.telegram_bot_token:
+        LOG.warning("Telegram status listener disabled — bot token is missing")
+        return
+
+    base_url = f"https://api.telegram.org/bot{cfg.telegram_bot_token}"
+    timeout = aiohttp.ClientTimeout(total=40)
+    offset: int | None = None
+    LOG.info("Telegram /start status listener active")
+
+    while True:
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                while True:
+                    params: dict[str, object] = {
+                        "timeout": 25,
+                        "allowed_updates": json.dumps(["message"]),
+                    }
+                    if offset is not None:
+                        params["offset"] = offset
+                    async with session.get(f"{base_url}/getUpdates", params=params) as response:
+                        response.raise_for_status()
+                        payload = await response.json()
+                    if payload.get("ok") is not True:
+                        raise RuntimeError("Telegram getUpdates returned an error")
+
+                    for update in payload.get("result", []):
+                        update_id = update.get("update_id")
+                        if isinstance(update_id, int):
+                            offset = update_id + 1
+                        message = update.get("message", {})
+                        chat = message.get("chat", {})
+                        if chat.get("type") != "private" or not is_start_command(message.get("text")):
+                            continue
+                        chat_id = chat.get("id")
+                        if not isinstance(chat_id, int):
+                            continue
+                        status = (
+                            "🟢 Active\n"
+                            "The Bybit breakout scanner is online and monitoring "
+                            f"{len(cfg.symbols)} symbols on {cfg.timeframe} candles.\n"
+                            f"Checked at {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S UTC')}."
+                        )
+                        async with session.post(
+                            f"{base_url}/sendMessage",
+                            data={"chat_id": str(chat_id), "text": status},
+                        ) as response:
+                            response.raise_for_status()
+        except (aiohttp.ClientError, asyncio.TimeoutError, RuntimeError) as exc:
+            LOG.warning("Telegram status listener reconnecting: %s", exc)
+            await asyncio.sleep(5)
