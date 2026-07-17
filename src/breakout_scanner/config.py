@@ -60,7 +60,8 @@ class Settings(BaseSettings):
     @field_validator("rest_base_url")
     @classmethod
     def fixed_rest_host(cls, value: str) -> str:
-        if value.rstrip("/") != "https://api.bybit.com":
+        allowed = {"https://api.bybit.com", "https://api.bytick.com"}
+        if value.rstrip("/") not in allowed:
             raise ValueError("REST host is allowlisted to Bybit V5")
         return value.rstrip("/")
 

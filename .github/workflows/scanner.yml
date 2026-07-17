@@ -20,6 +20,7 @@ jobs:
       DATABASE_PATH: scanner.db
       DEBUG_DECISIONS: "true"
       LOG_LEVEL: INFO
+      REST_BASE_URL: https://api.bytick.com
       SYMBOLS: '["BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","XRPUSDT","ADAUSDT","DOGEUSDT","AVAXUSDT","LINKUSDT","1000PEPEUSDT"]'
       TIMEFRAME: 5m
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
