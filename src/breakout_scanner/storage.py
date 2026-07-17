@@ -27,6 +27,10 @@ class Storage:
                     status TEXT NOT NULL, exit_price REAL, pnl_usdt REAL, outcome_r REAL,
                     FOREIGN KEY(signal_id) REFERENCES decisions(signal_id)
                 );
+                CREATE TABLE IF NOT EXISTS telegram_subscribers (
+                    chat_id INTEGER PRIMARY KEY,
+                    subscribed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
             """)
 
     def save(self, symbol: str, decision: Decision) -> bool:
@@ -53,3 +57,18 @@ class Storage:
             ).fetchone()
         return row is not None
 
+    def add_telegram_subscriber(self, chat_id: int) -> None:
+        with sqlite3.connect(self.path) as connection:
+            connection.execute(
+                "INSERT OR IGNORE INTO telegram_subscribers(chat_id) VALUES(?)",
+                (chat_id,),
+            )
+
+    def remove_telegram_subscriber(self, chat_id: int) -> None:
+        with sqlite3.connect(self.path) as connection:
+            connection.execute("DELETE FROM telegram_subscribers WHERE chat_id=?", (chat_id,))
+
+    def telegram_subscribers(self) -> list[int]:
+        with sqlite3.connect(self.path) as connection:
+            rows = connection.execute("SELECT chat_id FROM telegram_subscribers ORDER BY subscribed_at").fetchall()
+        return [int(row[0]) for row in rows]

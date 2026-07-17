@@ -9,6 +9,7 @@ import aiohttp
 
 from .config import Settings
 from .models import Direction, Signal
+from .storage import Storage
 
 LOG = logging.getLogger(__name__)
 
@@ -43,15 +44,29 @@ def format_telegram(signal: Signal) -> str:
 ⚠️ אות ל-Paper Trading בלבד. הציון אינו הבטחה להצלחה."""
 
 
-async def send_telegram(signal: Signal, cfg: Settings) -> bool:
-    if not cfg.telegram_bot_token or not cfg.telegram_chat_id:
+async def send_telegram(signal: Signal, cfg: Settings, chat_ids: list[int] | None = None) -> bool:
+    if not cfg.telegram_bot_token:
         return False
     url = f"https://api.telegram.org/bot{cfg.telegram_bot_token}/sendMessage"
     timeout = aiohttp.ClientTimeout(total=cfg.request_timeout_seconds)
+    recipients = set(chat_ids or [])
+    if cfg.telegram_chat_id:
+        try:
+            recipients.add(int(cfg.telegram_chat_id))
+        except ValueError:
+            LOG.warning("Configured Telegram chat ID is invalid")
+    if not recipients:
+        return False
+    delivered = False
     async with aiohttp.ClientSession(timeout=timeout) as session:
-        async with session.post(url, data={"chat_id": cfg.telegram_chat_id, "text": format_telegram(signal)}) as response:
-            response.raise_for_status()
-    return True
+        for chat_id in recipients:
+            try:
+                async with session.post(url, data={"chat_id": str(chat_id), "text": format_telegram(signal)}) as response:
+                    response.raise_for_status()
+                delivered = True
+            except aiohttp.ClientError as exc:
+                LOG.warning("Telegram alert delivery failed: %s", type(exc).__name__)
+    return delivered
 
 
 def is_start_command(text: object) -> bool:
@@ -60,7 +75,13 @@ def is_start_command(text: object) -> bool:
     return text.strip().split(maxsplit=1)[0].split("@", 1)[0].lower() == "/start"
 
 
-async def listen_for_telegram_commands(cfg: Settings) -> None:
+def is_stop_command(text: object) -> bool:
+    if not isinstance(text, str) or not text.strip():
+        return False
+    return text.strip().split(maxsplit=1)[0].split("@", 1)[0].lower() == "/stop"
+
+
+async def listen_for_telegram_commands(cfg: Settings, storage: Storage) -> None:
     if not cfg.telegram_bot_token:
         LOG.warning("Telegram status listener disabled — bot token is missing")
         return
@@ -92,17 +113,25 @@ async def listen_for_telegram_commands(cfg: Settings) -> None:
                             offset = update_id + 1
                         message = update.get("message", {})
                         chat = message.get("chat", {})
-                        if chat.get("type") != "private" or not is_start_command(message.get("text")):
+                        if chat.get("type") != "private":
                             continue
                         chat_id = chat.get("id")
                         if not isinstance(chat_id, int):
                             continue
-                        status = (
-                            "🟢 Active\n"
-                            "The Bybit breakout scanner is online and monitoring "
-                            f"{len(cfg.symbols)} symbols on {cfg.timeframe} candles.\n"
-                            f"Checked at {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S UTC')}."
-                        )
+                        text = message.get("text")
+                        if is_start_command(text):
+                            storage.add_telegram_subscriber(chat_id)
+                            status = (
+                                "🟢 Active — alerts subscribed\n"
+                                "The Bybit breakout scanner is online and monitoring "
+                                f"{len(cfg.symbols)} symbols on {cfg.timeframe} candles.\n"
+                                f"Checked at {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S UTC')}."
+                            )
+                        elif is_stop_command(text):
+                            storage.remove_telegram_subscriber(chat_id)
+                            status = "🔕 Alerts stopped. Send /start to subscribe again."
+                        else:
+                            continue
                         async with session.post(
                             f"{base_url}/sendMessage",
                             data={"chat_id": str(chat_id), "text": status},

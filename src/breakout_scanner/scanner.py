@@ -21,6 +21,11 @@ class Scanner:
         self.market = BybitMarketData(cfg)
         self.storage = Storage(cfg.database_path)
         self.storage.initialize()
+        if cfg.telegram_chat_id:
+            try:
+                self.storage.add_telegram_subscriber(int(cfg.telegram_chat_id))
+            except ValueError:
+                LOG.warning("Configured Telegram chat ID is invalid")
 
     async def scan_symbol(self, symbol: str) -> bool:
         try:
@@ -46,7 +51,7 @@ class Scanner:
                     LOG.info("%-14s NO_SIGNAL — duplicate level", symbol)
                     return True
                 if self.storage.save(symbol, decision):
-                    await send_telegram(signal, self.cfg)
+                    await send_telegram(signal, self.cfg, self.storage.telegram_subscribers())
                     LOG.info("%-14s PAPER_SIGNAL — %s score=%s", symbol, signal.direction, signal.confidence_score)
                     print(json.dumps(signal.as_dict(), ensure_ascii=False, indent=2))
             else:
@@ -68,7 +73,7 @@ class Scanner:
 
     async def run(self) -> None:
         await self.once()
-        await asyncio.gather(self._run_market_stream(), listen_for_telegram_commands(self.cfg))
+        await asyncio.gather(self._run_market_stream(), listen_for_telegram_commands(self.cfg, self.storage))
 
     async def _run_market_stream(self) -> None:
         cycle_end: object | None = None
